@@ -7,8 +7,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-COPY . .
-COPY cookies.txt /app/cookies.txt
+COPY index.js ./
+COPY cookies.txt ./
 
 EXPOSE 3000
 
