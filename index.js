@@ -1,7 +1,9 @@
 const express = require('express');
-const ytdl = require('ytdl-core');
 const cors = require('cors');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 
+const execAsync = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -20,47 +22,28 @@ app.get('/audio/:videoId', async (req, res) => {
   try {
     console.log(`[Server] Getting audio for video: ${videoId}`);
     
-    const info = await ytdl.getInfo(videoId);
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Get best audio format
-    const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+    // Use yt-dlp to get the best audio stream URL
+    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url "${url}"`;
     
-    if (!audioFormats || audioFormats.length === 0) {
-      return res.status(404).json({ error: 'No audio stream found' });
+    const { stdout, stderr } = await execAsync(command, { timeout: 30000 });
+    
+    const streamUrl = stdout.trim();
+    
+    if (!streamUrl) {
+      throw new Error('No stream URL returned');
     }
     
-    // Sort by bitrate and pick highest quality
-    audioFormats.sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
-    const bestAudio = audioFormats[0];
-    
-    console.log(`[Server] Found audio stream: ${bestAudio.mimeType} @ ${bestAudio.audioBitrate}kbps`);
+    console.log(`[Server] Successfully got stream URL`);
     
     res.json({
-      url: bestAudio.url,
-      mimeType: bestAudio.mimeType,
-      bitrate: bestAudio.audioBitrate,
-      title: info.videoDetails.title,
-      duration: info.videoDetails.lengthSeconds
+      url: streamUrl,
+      videoId: videoId
     });
     
   } catch (error) {
-    console.error(`[Server] Error getting audio for ${videoId}:`, error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Search YouTube by song title and artist
-app.get('/search', async (req, res) => {
-  const { q } = req.query;
-  
-  if (!q) {
-    return res.status(400).json({ error: 'Query parameter q is required' });
-  }
-  
-  try {
-    // We use YouTube Data API for search - just return that we need a videoId
-    res.json({ message: 'Use YouTube Data API for search, then call /audio/:videoId' });
-  } catch (error) {
+    console.error(`[Server] Error:`, error.message);
     res.status(500).json({ error: error.message });
   }
 });
