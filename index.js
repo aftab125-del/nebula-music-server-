@@ -25,7 +25,7 @@ app.get('/audio/:videoId', async (req, res) => {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     
     // Use yt-dlp to get the best audio stream URL
-    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url "${url}"`;
+    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url --extractor-args "youtube:player_client=android" --no-check-certificates "${url}"`;
     
     const { stdout, stderr } = await execAsync(command, { timeout: 30000 });
     
