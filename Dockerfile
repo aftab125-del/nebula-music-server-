@@ -8,6 +8,7 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
+COPY cookies.txt /app/cookies.txt
 
 EXPOSE 3000
 
