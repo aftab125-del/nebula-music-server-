@@ -1,5 +1,0 @@
-[phases.install]
-cmds = ["pip install yt-dlp"]
-
-[start]
-cmd = "node index.js"
