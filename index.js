@@ -30,7 +30,7 @@ app.get('/stream/:videoId', async (req, res) => {
     
     const ytdlp = spawn('yt-dlp', [
       '-f', 'bestaudio[ext=m4a]/bestaudio/best',
-      '--cookies', '/app/cookies.txt',
+      '--cookies', '/etc/secrets/cookies.txt',
       '--no-check-certificates',
       '-o', '-',
       url
@@ -67,7 +67,7 @@ app.get('/audio/:videoId', async (req, res) => {
   
   try {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url --cookies /app/cookies.txt --no-check-certificates "${url}"`;
+    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url --cookies /etc/secrets/cookies.txt --no-check-certificates "${url}"`;
     const { stdout } = await execAsync(command, { timeout: 30000 });
     const streamUrl = stdout.trim();
     if (!streamUrl) throw new Error('No stream URL returned');
