@@ -43,6 +43,7 @@ app.get('/stream/:videoId', async (req, res) => {
       '--cookies', COOKIES_PATH,
       '--no-check-certificates',
       '--extractor-args', 'youtube:player_client=web',
+      '--remote-components', 'ejs:github',
       '-o', '-',
       url
     ]);
@@ -77,7 +78,7 @@ app.get('/audio/:videoId', async (req, res) => {
   
   try {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url --cookies ${COOKIES_PATH} --no-check-certificates --extractor-args "youtube:player_client=web" "${url}"`;
+    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url --cookies ${COOKIES_PATH} --no-check-certificates --extractor-args "youtube:player_client=web" --remote-components "ejs:github" "${url}"`;
     const { stdout } = await execAsync(command, { timeout: 30000 });
     const streamUrl = stdout.trim();
     if (!streamUrl) throw new Error('No stream URL returned');
