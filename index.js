@@ -1,231 +1,476 @@
 const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
-const { promisify } = require('util');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 
-const execAsync = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Process safety nets to prevent yt-dlp/network errors from crashing the Node process
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[Server Safety Net] Unhandled Rejection at:', promise, 'reason:', reason);
+// -----------------------------------------------------------------------------
+// Process safety
+// -----------------------------------------------------------------------------
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server Safety Net] Unhandled rejection:', reason);
 });
 
-process.on('uncaughtException', (err) => {
-  console.error('[Server Safety Net] Uncaught Exception:', err.message, err.stack);
+process.on('uncaughtException', (error) => {
+  console.error('[Server Safety Net] Uncaught exception:', error);
 });
 
-// Initialize Supabase Storage Client
+// -----------------------------------------------------------------------------
+// Supabase
+// -----------------------------------------------------------------------------
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 let supabase = null;
 
 if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  console.log('[Server] Supabase Storage client initialized successfully.');
+  supabase = createClient(
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY
+  );
+
+  console.log('[Server] Supabase Storage client initialized.');
 } else {
-  console.warn('[Server] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set.');
+  console.warn(
+    '[Server] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.'
+  );
 }
 
-// Copy cookies from read-only /etc/secrets/ to writable /tmp/ at startup
-const SECRET_COOKIES = '/etc/secrets/cookies.txt';
-const COOKIES_PATH = '/tmp/cookies.txt';
-try {
-  if (fs.existsSync(SECRET_COOKIES)) {
-    fs.copyFileSync(SECRET_COOKIES, COOKIES_PATH);
-    console.log('[Server] Cookies copied from /etc/secrets/ to /tmp/');
-  } else {
-    console.warn('[Server] No cookies file found at /etc/secrets/cookies.txt');
-  }
-} catch (err) {
-  console.error('[Server] Failed to copy cookies:', err.message);
-}
+// -----------------------------------------------------------------------------
+// Middleware
+// -----------------------------------------------------------------------------
 
-// --- Supabase Storage Helpers ---
+app.use(cors());
+app.use(express.json());
 
-/**
- * Checks if a file named ${videoId}.m4a exists in the audio-cache Supabase Storage bucket.
- * Returns the public URL if it exists, or null if not.
- */
+// -----------------------------------------------------------------------------
+// Health check
+// -----------------------------------------------------------------------------
+
+app.get('/', (req, res) => {
+  res.json({
+    status: 'NebulaMusic Server is running',
+    ytDlp: true,
+    cookies: false,
+    storage: Boolean(supabase),
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Supabase Storage helpers
+// -----------------------------------------------------------------------------
+
 async function getSupabaseAudioUrl(videoId) {
-  if (!supabase) return null;
+  if (!supabase) {
+    return null;
+  }
+
   const fileName = `${videoId}.m4a`;
 
   try {
-    const { data, error } = await supabase.storage.from('audio-cache').list('', {
-      search: fileName,
-      limit: 10,
-    });
+    const { data, error } = await supabase.storage
+      .from('audio-cache')
+      .list('', {
+        search: fileName,
+        limit: 10,
+      });
 
     if (error) {
-      console.warn(`[Supabase Storage] List check error for ${fileName}:`, error.message);
+      console.warn(
+        `[Supabase Storage] List error for ${fileName}:`,
+        error.message
+      );
+
       return null;
     }
 
-    const exists = data && data.some((f) => f.name === fileName);
-    if (!exists) return null;
+    const exists =
+      Array.isArray(data) &&
+      data.some((file) => file.name === fileName);
 
-    const { data: publicUrlData } = supabase.storage.from('audio-cache').getPublicUrl(fileName);
+    if (!exists) {
+      return null;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('audio-cache')
+      .getPublicUrl(fileName);
+
     return publicUrlData?.publicUrl || null;
-  } catch (err) {
-    console.warn(`[Supabase Storage] Check exception for ${videoId}:`, err.message);
+  } catch (error) {
+    console.warn(
+      `[Supabase Storage] Check failed for ${videoId}:`,
+      error.message
+    );
+
     return null;
   }
 }
 
-/**
- * Uploads a local file to the audio-cache Supabase Storage bucket under ${videoId}.m4a.
- * Returns the public URL upon successful upload.
- */
 async function uploadToSupabaseStorage(videoId, localFilePath) {
-  if (!supabase) return null;
+  if (!supabase) {
+    return null;
+  }
+
   const fileName = `${videoId}.m4a`;
-  console.log(`[Supabase Storage] Uploading ${fileName}...`);
+
+  console.log(
+    `[Supabase Storage] Uploading ${fileName}...`
+  );
 
   const fileBuffer = fs.readFileSync(localFilePath);
-  const { data, error } = await supabase.storage.from('audio-cache').upload(fileName, fileBuffer, {
-    contentType: 'audio/mp4',
-    upsert: true,
-  });
+
+  const { error } = await supabase.storage
+    .from('audio-cache')
+    .upload(fileName, fileBuffer, {
+      contentType: 'audio/mp4',
+      upsert: true,
+    });
 
   if (error) {
-    console.error(`[Supabase Storage] Upload failed for ${fileName}:`, error.message);
+    console.error(
+      `[Supabase Storage] Upload failed:`,
+      error.message
+    );
+
     throw error;
   }
 
-  console.log(`[Supabase Storage] Uploaded successfully: ${fileName}`);
-  const { data: publicUrlData } = supabase.storage.from('audio-cache').getPublicUrl(fileName);
+  const { data: publicUrlData } = supabase.storage
+    .from('audio-cache')
+    .getPublicUrl(fileName);
+
   return publicUrlData?.publicUrl || null;
 }
 
-// Tracks in-progress downloads so concurrent requests for the same song
-// wait for the same download & upload task instead of starting duplicate yt-dlp calls.
+// -----------------------------------------------------------------------------
+// yt-dlp
+// -----------------------------------------------------------------------------
+
 const inFlightDownloads = new Map();
 
 function processAndCacheAudio(videoId) {
   if (inFlightDownloads.has(videoId)) {
-    console.log(`[Cache] Attaching to existing in-flight download: ${videoId}`);
+    console.log(
+      `[Cache] Joining existing download: ${videoId}`
+    );
+
     return inFlightDownloads.get(videoId);
   }
 
-  const tempPath = path.join('/tmp', `${videoId}.m4a.tmp`);
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const tempPath = path.join(
+    '/tmp',
+    `${videoId}.m4a`
+  );
 
-  const processPromise = new Promise((resolve, reject) => {
-    console.log(`[Cache] Downloading via yt-dlp to temp: ${videoId}`);
-    const ytdlp = spawn('yt-dlp', [
-      '-f', 'bestaudio[ext=m4a]/bestaudio/best',
-      '--cookies', COOKIES_PATH,
-      '--no-check-certificates',
-      '--extractor-args', 'youtube:player_client=web',
-      '--remote-components', 'ejs:github',
-      '-o', tempPath,
-      url
-    ]);
+  const youtubeUrl =
+    `https://www.youtube.com/watch?v=${videoId}`;
 
-    ytdlp.stderr.on('data', (data) => {
-      console.log(`[yt-dlp]: ${data}`);
+  const promise = new Promise((resolve, reject) => {
+    console.log(
+      `[yt-dlp] Starting extraction: ${videoId}`
+    );
+
+    const args = [
+      '--no-playlist',
+
+      // Prefer m4a audio.
+      '-f',
+      'bestaudio[ext=m4a]/bestaudio/best',
+
+      // Convert fallback formats to m4a.
+      '--extract-audio',
+      '--audio-format',
+      'm4a',
+
+      // YouTube JS challenge support.
+      '--js-runtimes',
+      'deno',
+
+      '--remote-components',
+      'ejs:github',
+
+      // Use the web player client.
+      '--extractor-args',
+      'youtube:player_client=web',
+
+      // Output.
+      '-o',
+      tempPath,
+
+      youtubeUrl,
+    ];
+
+    const ytdlp = spawn(
+      'yt-dlp',
+      args,
+      {
+        env: process.env,
+      }
+    );
+
+    let stderr = '';
+    let stdout = '';
+
+    ytdlp.stdout.on('data', (data) => {
+      const text = data.toString();
+
+      stdout += text;
+
+      console.log(
+        `[yt-dlp stdout] ${text.trim()}`
+      );
     });
 
-    ytdlp.on('close', async (code) => {
-      if (code === 0 && fs.existsSync(tempPath) && fs.statSync(tempPath).size > 0) {
-        console.log(`[Cache] yt-dlp download complete: ${videoId}`);
-        try {
-          let uploadedUrl = null;
-          if (supabase) {
-            uploadedUrl = await uploadToSupabaseStorage(videoId, tempPath);
-          }
-          // Clean up local temp file after upload
-          if (fs.existsSync(tempPath)) {
-            try { fs.unlinkSync(tempPath); } catch (e) {}
-          }
-          resolve({ uploadedUrl, tempPath });
-        } catch (uploadErr) {
-          if (fs.existsSync(tempPath)) {
-            try { fs.unlinkSync(tempPath); } catch (e) {}
-          }
-          reject(uploadErr);
-        }
-      } else {
-        if (fs.existsSync(tempPath)) {
-          try { fs.unlinkSync(tempPath); } catch (e) {}
-        }
-        reject(new Error(`yt-dlp exited with code ${code}`));
-      }
+    ytdlp.stderr.on('data', (data) => {
+      const text = data.toString();
+
+      stderr += text;
+
+      console.log(
+        `[yt-dlp stderr] ${text.trim()}`
+      );
     });
 
     ytdlp.on('error', (error) => {
-      if (fs.existsSync(tempPath)) {
-        try { fs.unlinkSync(tempPath); } catch (e) {}
-      }
-      reject(error);
+      cleanup();
+
+      reject(
+        new Error(
+          `Unable to start yt-dlp: ${error.message}`
+        )
+      );
     });
+
+    ytdlp.on('close', async (code) => {
+      if (
+        code !== 0 ||
+        !fs.existsSync(tempPath)
+      ) {
+        cleanup();
+
+        const diagnostic =
+          stderr
+            .trim()
+            .split('\n')
+            .slice(-12)
+            .join('\n');
+
+        reject(
+          new Error(
+            `yt-dlp exited with code ${code}.\n${diagnostic}`
+          )
+        );
+
+        return;
+      }
+
+      try {
+        const stats = fs.statSync(tempPath);
+
+        if (stats.size === 0) {
+          cleanup();
+
+          reject(
+            new Error(
+              'yt-dlp produced an empty audio file.'
+            )
+          );
+
+          return;
+        }
+
+        console.log(
+          `[yt-dlp] Download complete: ${videoId} (${stats.size} bytes)`
+        );
+
+        if (!supabase) {
+          cleanup();
+
+          reject(
+            new Error(
+              'Supabase Storage is not configured.'
+            )
+          );
+
+          return;
+        }
+
+        const uploadedUrl =
+          await uploadToSupabaseStorage(
+            videoId,
+            tempPath
+          );
+
+        cleanup();
+
+        if (!uploadedUrl) {
+          reject(
+            new Error(
+              'Supabase Storage did not return a public URL.'
+            )
+          );
+
+          return;
+        }
+
+        resolve({
+          uploadedUrl,
+        });
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
+
+    function cleanup() {
+      if (fs.existsSync(tempPath)) {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch {
+          // Ignore cleanup failure.
+        }
+      }
+    }
   });
 
-  inFlightDownloads.set(videoId, processPromise);
-  processPromise.finally(() => inFlightDownloads.delete(videoId));
+  inFlightDownloads.set(videoId, promise);
 
-  return processPromise;
+  promise.finally(() => {
+    inFlightDownloads.delete(videoId);
+  });
+
+  return promise;
 }
 
-app.use(cors());
-app.use(express.json());
-app.get('/', (req, res) => {
-  res.json({ status: 'NebulaMusic Server is running!' });
-});
+// -----------------------------------------------------------------------------
+// Stream endpoint
+// -----------------------------------------------------------------------------
 
-// Stream audio - serves from Supabase Storage cache if available, otherwise downloads and uploads
 app.get('/stream/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    return res.status(400).json({
+      error: 'Invalid YouTube video ID.',
+    });
+  }
+
   try {
-    // 1. Check Supabase Storage cache first
-    const cachedUrl = await getSupabaseAudioUrl(videoId);
+    console.log(
+      `[Server] Stream request: ${videoId}`
+    );
+
+    // ---------------------------------------------------------
+    // 1. Check Supabase cache.
+    // ---------------------------------------------------------
+
+    const cachedUrl =
+      await getSupabaseAudioUrl(videoId);
+
     if (cachedUrl) {
-      console.log(`[Server] Serving from Supabase Storage: ${videoId}`);
-      return res.redirect(302, cachedUrl);
+      console.log(
+        `[Server] Cache hit: ${videoId}`
+      );
+
+      return res.redirect(
+        302,
+        cachedUrl
+      );
     }
 
-    // 2. Not cached: Download via yt-dlp to temp file -> Upload to Supabase Storage
-    console.log(`[Server] Not in Supabase Storage, downloading: ${videoId}`);
-    const { uploadedUrl } = await processAndCacheAudio(videoId);
+    // ---------------------------------------------------------
+    // 2. Download + cache.
+    // ---------------------------------------------------------
 
-    if (uploadedUrl) {
-      console.log(`[Server] Redirecting to uploaded Supabase Storage audio: ${videoId}`);
-      return res.redirect(302, uploadedUrl);
-    } else {
-      throw new Error('Supabase Storage client is not configured.');
+    console.log(
+      `[Server] Cache miss: ${videoId}`
+    );
+
+    const result =
+      await processAndCacheAudio(videoId);
+
+    if (!result.uploadedUrl) {
+      throw new Error(
+        'Audio was extracted but no storage URL was returned.'
+      );
     }
 
+    console.log(
+      `[Server] Returning cached audio: ${videoId}`
+    );
+
+    return res.redirect(
+      302,
+      result.uploadedUrl
+    );
   } catch (error) {
-    console.error(`[Server] Extraction Error for ${videoId}:`, error.message);
+    console.error(
+      `[Server] Extraction failed for ${videoId}:`,
+      error.message
+    );
+
     if (!res.headersSent) {
-      res.status(503).json({ error: `Audio extraction failed: ${error.message}` });
+      return res.status(503).json({
+        error: 'Audio extraction failed.',
+      });
     }
   }
 });
 
-// Get audio URL (kept as backup)
-app.get('/audio/:videoId', async (req, res) => {
-  const { videoId } = req.params;
-  
-  try {
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio/best" --get-url --cookies ${COOKIES_PATH} --no-check-certificates --extractor-args "youtube:player_client=web" --remote-components "ejs:github" "${url}"`;
-    const { stdout } = await execAsync(command, { timeout: 30000 });
-    const streamUrl = stdout.trim();
-    if (!streamUrl) throw new Error('No stream URL returned');
-    res.json({ url: streamUrl, videoId: videoId });
-  } catch (error) {
-    console.error(`[Server] Audio URL Error for ${videoId}:`, error.message);
-    res.status(503).json({ error: `Audio extraction failed: ${error.message}` });
-  }
+// -----------------------------------------------------------------------------
+// Diagnostic endpoint
+// -----------------------------------------------------------------------------
+
+app.get('/health/yt-dlp', async (req, res) => {
+  const ytdlp = spawn(
+    'yt-dlp',
+    ['--version'],
+    {
+      env: process.env,
+    }
+  );
+
+  let output = '';
+
+  ytdlp.stdout.on('data', (data) => {
+    output += data.toString();
+  });
+
+  ytdlp.on('close', (code) => {
+    if (code !== 0) {
+      return res.status(503).json({
+        ok: false,
+        error: 'yt-dlp is unavailable.',
+      });
+    }
+
+    return res.json({
+      ok: true,
+      ytDlpVersion: output.trim(),
+    });
+  });
+
+  ytdlp.on('error', () => {
+    return res.status(503).json({
+      ok: false,
+      error: 'yt-dlp could not be started.',
+    });
+  });
 });
+
+// -----------------------------------------------------------------------------
+// Start server
+// -----------------------------------------------------------------------------
 
 app.listen(PORT, () => {
-  console.log(`NebulaMusic Server running on port ${PORT}`);
+  console.log(
+    `NebulaMusic Server running on port ${PORT}`
+  );
 });
